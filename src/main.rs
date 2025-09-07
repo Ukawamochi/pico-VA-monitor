@@ -13,21 +13,27 @@
 #![no_std]
 #![no_main]
 
-use core::fmt::Write as _;
+// use core::fmt::Write as _;
 
 use cortex_m_rt::entry;
 use defmt::*;
 use defmt_rtt as _;
-use fugit::ExtU32 as _;
+// use fugit::ExtU32 as _;
 use fugit::RateExtU32 as _;
 use panic_probe as _;
 
 use rp2040_hal as hal;
 use hal::{clocks::init_clocks_and_plls, gpio::FunctionI2C, pac, sio::Sio, watchdog::Watchdog, I2C, Timer};
+use rp2040_hal::Clock;
+use embedded_hal::delay::DelayNs;
 
 // ドライバ（sync API）
 // 注: 実クレートのAPI名に合わせて適宜更新してください
 use ina219 as ina;
+use ina219::address::Address;
+use ina219::calibration::IntCalibration;
+use ina219::configuration::{Configuration, BusVoltageRange, ShuntVoltageRange};
+use ina219::errors::InitializationErrorReason;
 
 mod metrics;
 mod termviz;
@@ -44,14 +50,16 @@ const E_AA_WH: f32 = 2.5;  // AA の代表的エネルギー [Wh]
 const E_AAA_WH: f32 = 1.1; // AAA の代表的エネルギー [Wh]
 
 const LOOP_MS: u32 = 500; // 計測周期 [ms]
+// INA219 のI2Cアドレス（固定）
+// A1のみジャンパで VCC の場合は 0x44 が一般的。ブレークアウトによっては 0x48（A1=SDA）, 0x4C（A1=SCL）, 既定 0x40（A1=GND）の場合も。
+// 変更したい場合は下記定数を書き換えてください。
+const INA_ADDR: u8 = 0x44;
 
 #[entry]
 fn main() -> ! {
-    info!("pico-va-monitor start");
-
     // PAC 取得
     let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
+    let _core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
 
     // クロック初期化（外部XOSC 12MHz 前提）
@@ -77,22 +85,44 @@ fn main() -> ! {
     );
 
     // I2C0 @ 400kHz
-    let sda = pins.gpio4.into_mode::<FunctionI2C>();
-    let scl = pins.gpio5.into_mode::<FunctionI2C>();
+    // I2Cピンはプルアップが必須。PullUp入力→I2C機能へ遷移させると型が PullUp になります。
+    let sda = pins.gpio4.into_pull_up_input().into_function::<FunctionI2C>();
+    let scl = pins.gpio5.into_pull_up_input().into_function::<FunctionI2C>();
     let i2c = I2C::i2c0(
         pac.I2C0,
         sda,
         scl,
-        400.kHz(),
+        // I2C クロック。配線条件によっては 400kHz で不安定になる場合があるため、さらに 50kHz に下げて安定性を優先。
+        50.kHz(),
         &mut pac.RESETS,
         clocks.peripheral_clock.freq(),
     );
 
     // タイマ（Δt計測 & ウェイト）
-    let mut timer = Timer::new(pac.TIMER, &mut pac.RESETS);
+    let mut timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+    // RTT アタッチ猶予（ホストが接続する時間を与える）
+    timer.delay_ms(500u32);
+    info!("pico-va-monitor: boot");
 
-    // INA219 初期化
-    let mut ina = init_ina219(i2c).unwrap_or_else(|_| panic!("INA219 init failed"));
+    // INA219 初期化（デバッグ情報追加）
+    info!("Starting INA219 initialization...");
+    
+    let mut ina = match init_ina219(i2c) {
+        Ok(device) => {
+            info!("INA219 initialization successful");
+            device
+        }
+        Err(_) => {
+            error!("INA219 initialization failed - check I2C wiring and address");
+            error!("Expected connections:");
+            error!("  VCC -> Pico 3V3");
+            error!("  GND -> Pico GND");
+            error!("  SDA -> Pico GPIO4");
+            error!("  SCL -> Pico GPIO5");
+            error!("  VIN+/VIN- -> measurement circuit");
+            core::panic!("INA219 init failed")
+        }
+    };
 
     // 統計・積算
     let mut rs_v = metrics::RunningStats::new();
@@ -114,7 +144,7 @@ fn main() -> ! {
         last = now;
 
         match ina_next(&mut ina) {
-            Ok((v_mv, i_ua, p_uw)) => {
+            Ok(Some((v_mv, i_ua, p_uw))) => {
                 // 単位変換
                 let v_v = v_mv as f32 / 1000.0;
                 let i_ma = i_ua as f32 / 1000.0;
@@ -135,9 +165,9 @@ fn main() -> ! {
                 let p_bar = termviz::render_bar(p_pct, &mut bar_p);
 
                 // defmt 出力（1～2行）
-                info!("V {=f32} V [{:str}] {=u8}%", v_v, v_bar, v_pct);
+                info!("V {=f32} V [{=str}] {=u8}%", v_v, v_bar, v_pct);
                 info!(
-                    "I {=f32} mA [{:str}] {=u8}%   P {=f32} mW [{:str}] {=u8}%",
+                    "I {=f32} mA [{=str}] {=u8}%   P {=f32} mW [{=str}] {=u8}%",
                     i_ma, i_bar, i_pct, p_mw, p_bar, p_pct
                 );
 
@@ -161,7 +191,10 @@ fn main() -> ! {
                     );
                 }
             }
-            Err(e) => {
+            Ok(None) => {
+                // 新規データ未到来。次サイクルへ。
+            }
+            Err(_e) => {
                 warn!("INA219 read error");
             }
         }
@@ -172,46 +205,95 @@ fn main() -> ! {
 }
 
 /// INA219 の初期化（校正 + 連続測定設定）
-fn init_ina219<I2CIF>(i2c: I2CIF) -> Result<ina::SyncIna219<I2CIF>, ()>
+fn init_ina219<I2CIF>(i2c: I2CIF) -> Result<ina::SyncIna219<I2CIF, IntCalibration>, ()>
 where
-    I2CIF: embedded_hal::blocking::i2c::Write + embedded_hal::blocking::i2c::WriteRead,
+    I2CIF: embedded_hal::i2c::I2c,
 {
-    // アドレス既定 0x40
-    let mut dev = ina::SyncIna219::new(i2c, ina::Address::default());
-
-    // 設定例：32Vレンジ / ゲインDiv8（用途に合わせて調整）
-    let cfg = ina::Config {
-        bus_range: ina::BusVoltageRange::Range32V,
-        shunt_gain: ina::ShuntVoltageRange::GainDiv8,
-        bus_adc: ina::AdcResolution::Avg128,
-        shunt_adc: ina::AdcResolution::Avg128,
-        mode: ina::OperatingMode::ShuntAndBusContinuous,
-    };
-    dev.set_config(&cfg).map_err(|_| ())?;
-
-    // 校正（IntCalibration）
-    // current_LSB[µA/bit] は MAX_EXPECTED_AMPS を 2^15 で割って見積
-    let current_lsb_ua_per_bit = (MAX_EXPECTED_AMPS * 1_000_000.0 / 32768.0) as u32;
+    info!("init_ina219: Starting calibration calculation...");
+    
+    // 校正（IntCalibration）: current_LSB[µA/bit] は MAX_EXPECTED_AMPS / 2^15 で見積
+    let current_lsb_ua_per_bit = (MAX_EXPECTED_AMPS * 1_000_000.0 / 32768.0) as i64;
     let r_shunt_uohm = (SHUNT_OHMS * 1_000_000.0) as u32;
-    let calib = ina::IntCalibration::new(r_shunt_uohm, current_lsb_ua_per_bit);
-    dev.set_calibration(&calib).map_err(|_| ())?;
+    
+    info!("init_ina219: current_lsb_ua_per_bit = {=i64}", current_lsb_ua_per_bit);
+    info!("init_ina219: r_shunt_uohm = {=u32}", r_shunt_uohm);
+    
+    let calib = match IntCalibration::new(ina::calibration::MicroAmpere(current_lsb_ua_per_bit), r_shunt_uohm) {
+        Some(c) => {
+            info!("init_ina219: Calibration created successfully");
+            c
+        }
+        None => {
+            error!("init_ina219: Failed to create calibration");
+            return Err(());
+        }
+    };
 
-    Ok(dev)
+    // 初期化＋校正適用
+    // 設定：32Vレンジ / シャント320mV（最大ゲイン）
+    let cfg = Configuration {
+        bus_voltage_range: BusVoltageRange::Fsr32v,
+        shunt_voltage_range: ShuntVoltageRange::Fsr320mv,
+        ..Default::default()
+    };
+    
+    // 固定アドレスで初期化（ユーザーは INA_ADDR を変更してください）
+    let addr = INA_ADDR;
+    info!("init_ina219: Using fixed address 0x{=u8:x}", addr);
+    match ina::SyncIna219::new_calibrated(i2c, Address::from_byte(addr).unwrap(), calib) {
+        Ok(mut dev) => {
+            info!("init_ina219: Device created, writing configuration...");
+            dev.set_configuration(cfg).map_err(|_| ())?;
+            info!("INA219 initialized at 0x{=u8:x}", addr);
+            Ok(dev)
+        }
+        Err(e) => {
+            error!("init_ina219: Initialization failed at fixed address 0x{=u8:x}", addr);
+            // フォールバック：全アドレスをスキャンしてヒントを出す（固定アドレスは変更不要。結果だけ参考にしてください）
+            let mut i2c = e.device; // I2C を回収
+            for scan in 0x40..=0x4F {
+                match ina::SyncIna219::new_calibrated(i2c, Address::from_byte(scan).unwrap(), calib) {
+                    Ok(mut dev) => {
+                        info!("init_ina219: Found device at 0x{=u8:x} (fallback scan)", scan);
+                        // ここでは戻さず参考情報のみ。直後に破棄して継続
+                        i2c = dev.destroy();
+                    }
+                    Err(er) => {
+                        i2c = er.device;
+                        match er.reason {
+                            InitializationErrorReason::I2cError(_) => warn!("scan: I2C error @0x{=u8:x}", scan),
+                            InitializationErrorReason::ConfigurationNotDefaultAfterReset => warn!("scan: cfg not default @0x{=u8:x}", scan),
+                            InitializationErrorReason::RegisterNotZeroAfterReset(_) => warn!("scan: reg not zero @0x{=u8:x}", scan),
+                            InitializationErrorReason::ShuntVoltageOutOfRange => warn!("scan: shunt out @0x{=u8:x}", scan),
+                            InitializationErrorReason::BusVoltageOutOfRange => warn!("scan: bus out @0x{=u8:x}", scan),
+                        }
+                    }
+                }
+            }
+            Err(())
+        }
+    }
 }
 
 /// 1サイクル分の計測値取得（mV, µA, µW）
-fn ina_next<I2CIF>(dev: &mut ina::SyncIna219<I2CIF>) -> Result<(i32, i32, i32), ()>
+fn ina_next<I2CIF>(dev: &mut ina::SyncIna219<I2CIF, IntCalibration>) -> Result<Option<(i32, i32, i32)>, ()>
 where
-    I2CIF: embedded_hal::blocking::i2c::Write + embedded_hal::blocking::i2c::WriteRead,
+    I2CIF: embedded_hal::i2c::I2c,
 {
-    // next_measurement() でまとめて取得
-    let m = dev.next_measurement().map_err(|_| ())?;
-    // 期待する単位：Bus電圧[mV] / 電流[µA] / 電力[µW]
-    Ok((m.bus_mv, m.current_ua, m.power_uw))
+    // next_measurement(): Ok(Some(..)) のときのみ新データ
+    match dev.next_measurement().map_err(|_| ())? {
+        Some(m) => {
+            // 期待する単位：Bus電圧[mV] / 電流[µA] / 電力[µW]
+            let v_mv = m.bus_voltage.voltage_mv() as i32;
+            let i_ua = m.current.0 as i32;
+            let p_uw = m.power.0 as i32;
+            Ok(Some((v_mv, i_ua, p_uw)))
+        }
+        None => Ok(None),
+    }
 }
 
 // BOOT2（必須）
 #[link_section = ".boot2"]
 #[used]
 static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
-

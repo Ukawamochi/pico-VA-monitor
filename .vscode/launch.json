@@ -6,14 +6,23 @@
         "type": "probe-rs-debug",
         "request": "launch",
         "name": "probe_rs Executable Test",
+        "env": {
+          "DEFMT_LOG": "info"
+        },
         "flashingConfig": {
           "flashingEnabled": true,
         },
         "chip": "RP2040",
         "coreConfigs": [
           {
-            "programBinary": "target/thumbv6m-none-eabi/debug/main",
+            "programBinary": "target/thumbv6m-none-eabi/debug/pico-va-monitor",
             "rttEnabled": true,
+            "rttChannelFormats": [
+              {
+                "channelNumber": 0,
+                "dataFormat": "Defmt"
+              }
+            ]
           }
         ]
       }

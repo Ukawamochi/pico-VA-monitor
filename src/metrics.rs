@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-use core::cmp::{max, min};
+
 
 /// 逐次統計（Welford法）
 /// 平均・分散・標準偏差・最小・最大を保持
@@ -41,7 +41,7 @@ impl RunningStats {
     }
 
     /// 標準偏差
-    pub fn stddev(&self) -> f32 { self.variance().sqrt() }
+    pub fn stddev(&self) -> f32 { libm::sqrtf(self.variance()) }
 }
 
 /// 積算器（固定小数）：
@@ -63,7 +63,7 @@ impl Accumulators {
 
     /// 積算更新
     /// v_v: V, i_ma: mA, p_mw: mW, dt_ms: 経過時間[ms]
-    pub fn update(&mut self, v_v: f32, i_ma: f32, p_mw: f32, dt_ms: u32) {
+    pub fn update(&mut self, _v_v: f32, i_ma: f32, p_mw: f32, dt_ms: u32) {
         self.uptime_ms = self.uptime_ms.saturating_add(dt_ms as u64);
 
         // 微小電流カットオフ
@@ -106,4 +106,3 @@ pub fn battery_equiv(wh: f32, e_aa_wh: f32, e_aaa_wh: f32) -> (f32, f32) {
     let aaa = if e_aaa_wh > 0.0 { wh / e_aaa_wh } else { 0.0 };
     (aa, aaa)
 }
-
