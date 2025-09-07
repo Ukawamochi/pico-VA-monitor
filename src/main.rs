@@ -29,7 +29,7 @@ use ina219::errors::InitializationErrorReason;
 const SHUNT_OHMS: f32 = 0.1; // シャント抵抗 [Ω]
 const MAX_EXPECTED_AMPS: f32 = 2.0; // 最大期待電流 [A]
 const LOOP_MS: u32 = 500; // 計測周期 [ms]
-const INA_ADDR: u8 = 0x44; // INA219のデフォルトアドレス:0x40（固定）
+const INA_ADDR: u8 = 0x44; //INA219の半田によってアドレスが変わります
 
 #[entry]
 fn main() -> ! {
