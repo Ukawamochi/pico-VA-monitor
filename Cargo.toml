@@ -1,21 +1,25 @@
 [package]
-name = "rp-rust-starter"
+name = "pico-va-monitor"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "main"
-path = "src/main.rs"
-test = false
-
 [dependencies]
-cortex-m = "0.7.5"
-cortex-m-rt = "0.7.5"
-fugit = "0.3.7"
-heapless = "0.8.0"
-panic-probe = { version = "0.3.0", features = ["defmt"] }
-rp-pico = "0.9.0"
-defmt = "1.0.1"
-defmt-rtt = "1.0.0"
-embedded-hal = "1.0.0"
+rp2040-hal = { version = "0.10", features = ["rt", "defmt"] }
+rp2040-boot2 = "0.3"
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+embedded-hal = "0.2.7"
+fugit = "0.3"
+defmt = "0.3"
+defmt-rtt = "0.4"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
 
+# INA219 ドライバ（同期APIを使用）
+# crates.io の最新版（0.2系）に合わせる
+ina219 = "0.2"
+
+[profile.release]
+codegen-units = 1
+debug = true
+incremental = false
+lto = true

@@ -137,12 +137,12 @@ dependencies = [
 
 [[package]]
 name = "defmt-rtt"
-version = "1.0.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2cac3b8a5644a9e02b75085ebad3b6deafdbdbdec04bb25086523828aa4dfd1"
+checksum = "c6eca0aae8aa2cf8333200ecbd236274697bc0a394765c858b3d9372eb1abcfa"
 dependencies = [
  "critical-section",
- "defmt 1.0.1",
+ "defmt 0.3.100",
 ]
 
 [[package]]
@@ -275,6 +275,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ina219"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "457a68120d2d0f0ca1b5c7f8e0ff3f77db9e34b1076a4e82f7097cbde7d2aaa4"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+]
+
+[[package]]
 name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -333,6 +343,22 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pico-va-monitor"
+version = "0.1.0"
+dependencies = [
+ "cortex-m",
+ "cortex-m-rt",
+ "defmt 0.3.100",
+ "defmt-rtt",
+ "embedded-hal 0.2.7",
+ "fugit",
+ "ina219",
+ "panic-probe",
+ "rp2040-boot2",
+ "rp2040-hal",
+]
 
 [[package]]
 name = "pio"
@@ -398,34 +424,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 
 [[package]]
-name = "rp-pico"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9342d3ac7011ac688300979e9b52a81f0add1d05feb02868cf94bfee0705b28"
-dependencies = [
- "cortex-m-rt",
- "fugit",
- "rp2040-boot2",
- "rp2040-hal",
- "usb-device",
-]
-
-[[package]]
-name = "rp-rust-starter"
-version = "0.1.0"
-dependencies = [
- "cortex-m",
- "cortex-m-rt",
- "defmt 1.0.1",
- "defmt-rtt",
- "embedded-hal 1.0.0",
- "fugit",
- "heapless",
- "panic-probe",
- "rp-pico",
-]
-
-[[package]]
 name = "rp2040-boot2"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -443,6 +441,7 @@ dependencies = [
  "bitfield 0.14.0",
  "cortex-m",
  "critical-section",
+ "defmt 0.3.100",
  "embedded-dma",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
