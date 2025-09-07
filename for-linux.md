@@ -22,7 +22,8 @@ EOF
 ```
 
 ## 3,ルールの適用
-```bashUSB を抜き差ししてください。
+USB を一度抜き差ししてから、以下を実行してください。
+```bash
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```

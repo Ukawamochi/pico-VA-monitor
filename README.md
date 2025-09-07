@@ -1,11 +1,11 @@
 # pico-va-monitor（RP2040 × INA219）
 
-Raspberry Pi Pico / Pico W（RP2040）と INA219 による**電圧・電流・電力**モニタです。500 ms 周期で `defmt` ログに**ASCIIバー**付きの即時値を出力し、定期的に**累計（mAh / mWh/Wh）**と**電池本数換算（AA/AAA）**、**統計（平均/最小/最大/標準偏差）**を表示します。
+Raspberry Pi Pico / Pico W（RP2040）と INA219 による**電圧・電流・電力**モニタです。いまは「最小構成」として、500 ms 周期で `defmt` ログに**V/I/P の数値のみ**を出力します（グラフや集計は無効化）。
 
 - HAL: `rp2040-hal`（安定版）
 - ログ: `defmt` + `defmt-rtt`
 - パニック: `panic-probe`（`print-defmt`有効）
-- I²C: 400 kHz（I2C0 / GPIO4,5）
+- I²C: 100 kHz（I2C0 / GPIO4,5、外部プルアップ必須）
 - 計測周期: 500 ms（実測Δtで積分）
 - 依存: `embedded-hal`, `ina219`（sync機能）, `fugit`
 
@@ -82,16 +82,13 @@ cargo build --release
   # 生成された .uf2 を RPI-RP2 にコピー
   ```
 
-## 調整可能な定数
+## 調整可能な定数（最小構成）
 
 - `src/main.rs`
   - `SHUNT_OHMS`（シャント抵抗 [Ω]、例: 0.1）
   - `MAX_EXPECTED_AMPS`（最大期待電流 [A]、例: 2.0）
-  - `V_MAX / I_MAX / P_MAX`（ASCIIメータのスケール）
-- `src/metrics.rs`
-  - カットオフ電流（`Accumulators::new(1)` の引数 [mA]）
 
-校正は `ina219::IntCalibration` を使用し、`SHUNT_OHMS` と `MAX_EXPECTED_AMPS` から `current_LSB`（µA/bit）を算出して適用します。
+校正は `ina219::IntCalibration` を使用し、`SHUNT_OHMS` と `MAX_EXPECTED_AMPS` から `current_LSB`（µA/bit）を算出して適用します。I2C アドレスはよくある候補（0x40/0x41/0x44/0x45/0x48/0x4C）を自動的に順番に試します。
 
 ## INA219 の I2C アドレスを変える方法（ハード側 / ソフト側）
 
@@ -106,52 +103,15 @@ cargo build --release
 
   （ブレイクアウトのドキュメントを必ず確認してください。ボードによっては接続先のラベルが異なります。）
 
-2) ソフト側（このリポジトリの変更箇所）
+2) ソフト側（このリポジトリの挙動）
 
-- コード内では `src/main.rs` の `init_ina219` 関数で INA219 を生成しています。現在は既定アドレス（0x40）を使うように `ina::Address::default()` が使われています。
-- もしハードでアドレスを変更したら、ソフト側でも同じアドレスを指定してください。例をいくつか示します（このリポジトリのスタイルに合わせて `ina` プレフィックスを使用）：
+- `src/main.rs` の初期化で、よくあるアドレス候補（0x40/0x41/0x44/0x45/0x48/0x4C）を自動的に順番に試し、最初に成功したアドレスを採用します。ジャンパ変更後でも基本はそのまま動く想定です。
+- 特定のアドレスだけに固定したい場合は、`init_ina219_auto` の候補配列を1個に絞るか、固定アドレス版の初期化に書き換えてください。
 
-  - デフォルト（そのまま）
-
-```rust
-// そのまま既定（A0=A1=GND -> 0x40）
-let mut dev = ina::SyncIna219::new(i2c, ina::Address::default());
-```
-
-  - バイトで指定する（例: 0x41）
-
-```rust
-let addr = ina::Address::from_byte(0x41).expect("invalid INA219 address");
-let mut dev = ina::SyncIna219::new(i2c, addr);
-```
-
-  - ピン指定で作る（より明示的）
-
-```rust
-// a0 = Vcc, a1 = Gnd -> 0x41
-let addr = ina::address::Address::from_pins(ina::address::Pin::Vcc, ina::address::Pin::Gnd);
-let mut dev = ina::SyncIna219::new(i2c, addr);
-```
-
-- 変更箇所は `src/main.rs` の `init_ina219` 内の次の行です（置き換えてください）:
-
-```rust
-// 変更前
-let mut dev = ina::SyncIna219::new(i2c, ina::Address::default());
-
-// 変更後（例: 0x41 を使う場合）
-let addr = ina::Address::from_byte(0x41).unwrap();
-let mut dev = ina::SyncIna219::new(i2c, addr);
-```
-
-以上で、ハードのジャンパ設定とソフトのアドレス指定が一致するようにしてください。
-
-## 表示例（defmt）
+## 表示例（defmt、最小構成）
 
 ```
-V  5.02 V [=============================..] 94%
-I  128.7 mA [#######......................] 22%   P  646.5 mW [#############..............] 40%
-Q=12.345 mAh  E=62.500 mWh (AA≈0.03本 / AAA≈0.06本)  up=00:07:12  I(avg/min/max/std)=135.2/0.0/412.8/45.1 mA
+V=5.02 V  I=128.7 mA  P=646.5 mW
 ```
 
 ## 電池本数換算の前提
@@ -185,4 +145,3 @@ Q=12.345 mAh  E=62.500 mWh (AA≈0.03本 / AAA≈0.06本)  up=00:07:12  I(avg/mi
 ***
 
 開発メモ：コード内コメント・ドキュメントは日本語で統一しています。`cargo fmt --all` と `cargo clippy -D warnings` を通すことを推奨します。
-

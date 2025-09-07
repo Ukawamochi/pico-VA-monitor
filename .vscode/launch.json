@@ -13,7 +13,7 @@
           "flashingEnabled": true,
         },
         "chip": "RP2040",
-        "probe": "6666:4444:xiao-rp2040",
+        //"probe": "6666:4444:xiao-rp2040",
         //"probe": "6666:4444:pico-bridge-swd",
         "coreConfigs": [
           {

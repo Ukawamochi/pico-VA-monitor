@@ -5,6 +5,11 @@
         "label": "build",
         "type": "shell",
         "command": "cargo build --target thumbv6m-none-eabi",
+        "options": {
+            "env": {
+                "DEFMT_LOG": "info"
+            }
+        },
         "group": {
             "kind": "build",
             "isDefault": true
