@@ -1,15 +1,3 @@
-//! RP2040 + INA219 電圧・電流・電力モニタ（500ms周期 / 統計・積算・ASCIIバー表示）
-//!
-//! 配線（Pico ピン）:
-//! - I2C0 SDA = GPIO4（ピン6）
-//! - I2C0 SCL = GPIO5（ピン7）
-//! - 3V3 ↔ VCC, GND ↔ GND
-//! - シャント: 0.1Ω を想定（VIN+ が電源側、VIN− が負荷側）
-//!
-//! Runner 例（コメント）:
-//! - probe-rs: `probe-rs run --chip RP2040 --release`
-//! - UF2: `elf2uf2-rs target/thumbv6m-none-eabi/release/pico-va-monitor` を BOOTSEL でコピー
-
 #![no_std]
 #![no_main]
 
@@ -53,7 +41,7 @@ const LOOP_MS: u32 = 500; // 計測周期 [ms]
 // INA219 のI2Cアドレス（固定）
 // A1のみジャンパで VCC の場合は 0x44 が一般的。ブレークアウトによっては 0x48（A1=SDA）, 0x4C（A1=SCL）, 既定 0x40（A1=GND）の場合も。
 // 変更したい場合は下記定数を書き換えてください。
-const INA_ADDR: u8 = 0x44;
+const INA_ADDR: u8 = 0x40;
 
 #[entry]
 fn main() -> ! {
@@ -95,21 +83,24 @@ fn main() -> ! {
         // I2C クロック。配線条件によっては 400kHz で不安定になる場合があるため、さらに 50kHz に下げて安定性を優先。
         50.kHz(),
         &mut pac.RESETS,
-        clocks.peripheral_clock.freq(),
+        // system_clock 周波数を渡す（I2C タイミング計算に使用）。
+        // rp2040-hal の例と同様に system_clock を指定するのが正。
+        clocks.system_clock.freq(),
     );
 
     // タイマ（Δt計測 & ウェイト）
     let mut timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
     // RTT アタッチ猶予（ホストが接続する時間を与える）
     timer.delay_ms(500u32);
-    info!("pico-va-monitor: boot");
+    info!("=== PICO VA MONITOR BOOT ===");
+    info!("System initialized, starting INA219...");
 
     // INA219 初期化（デバッグ情報追加）
     info!("Starting INA219 initialization...");
     
     let mut ina = match init_ina219(i2c) {
         Ok(device) => {
-            info!("INA219 initialization successful");
+            info!("INA219 initialization successful - device ready");
             device
         }
         Err(_) => {
@@ -129,13 +120,16 @@ fn main() -> ! {
     let mut rs_i = metrics::RunningStats::new();
     let mut rs_p = metrics::RunningStats::new();
     let mut acc = metrics::Accumulators::new(1); // 1 mA 未満を0扱い
+    info!("Metrics and accumulators initialized");
 
     // バッファ（ASCIIバー）
     let mut bar_v = [0u8; termviz::BAR_W];
     let mut bar_i = [0u8; termviz::BAR_W];
     let mut bar_p = [0u8; termviz::BAR_W];
+    info!("Display buffers initialized");
 
     // ループ
+    info!("=== STARTING MAIN MEASUREMENT LOOP ===");
     let mut last = timer.get_counter();
     let mut cyc: u32 = 0;
     loop {
@@ -145,6 +139,11 @@ fn main() -> ! {
 
         match ina_next(&mut ina) {
             Ok(Some((v_mv, i_ua, p_uw))) => {
+                // 最初の測定成功時にログ出力（一度だけ）
+                if cyc == 0 {
+                    info!("First measurement successful: V={=i32}mV, I={=i32}uA, P={=i32}uW", v_mv, i_ua, p_uw);
+                }
+                
                 // 単位変換
                 let v_v = v_mv as f32 / 1000.0;
                 let i_ma = i_ua as f32 / 1000.0;
@@ -248,28 +247,15 @@ where
             Ok(dev)
         }
         Err(e) => {
-            error!("init_ina219: Initialization failed at fixed address 0x{=u8:x}", addr);
-            // フォールバック：全アドレスをスキャンしてヒントを出す（固定アドレスは変更不要。結果だけ参考にしてください）
-            let mut i2c = e.device; // I2C を回収
-            for scan in 0x40..=0x4F {
-                match ina::SyncIna219::new_calibrated(i2c, Address::from_byte(scan).unwrap(), calib) {
-                    Ok(mut dev) => {
-                        info!("init_ina219: Found device at 0x{=u8:x} (fallback scan)", scan);
-                        // ここでは戻さず参考情報のみ。直後に破棄して継続
-                        i2c = dev.destroy();
-                    }
-                    Err(er) => {
-                        i2c = er.device;
-                        match er.reason {
-                            InitializationErrorReason::I2cError(_) => warn!("scan: I2C error @0x{=u8:x}", scan),
-                            InitializationErrorReason::ConfigurationNotDefaultAfterReset => warn!("scan: cfg not default @0x{=u8:x}", scan),
-                            InitializationErrorReason::RegisterNotZeroAfterReset(_) => warn!("scan: reg not zero @0x{=u8:x}", scan),
-                            InitializationErrorReason::ShuntVoltageOutOfRange => warn!("scan: shunt out @0x{=u8:x}", scan),
-                            InitializationErrorReason::BusVoltageOutOfRange => warn!("scan: bus out @0x{=u8:x}", scan),
-                        }
-                    }
-                }
+            error!("init_ina219: Initialization failed at address 0x{=u8:x}", addr);
+            match e.reason {
+                InitializationErrorReason::I2cError(_) => error!("  Reason: I2C communication error"),
+                InitializationErrorReason::ConfigurationNotDefaultAfterReset => error!("  Reason: Configuration not default after reset"),
+                InitializationErrorReason::RegisterNotZeroAfterReset(_) => error!("  Reason: Register not zero after reset"),
+                InitializationErrorReason::ShuntVoltageOutOfRange => error!("  Reason: Shunt voltage out of range"),
+                InitializationErrorReason::BusVoltageOutOfRange => error!("  Reason: Bus voltage out of range"),
             }
+            error!("  Check wiring and power supply");
             Err(())
         }
     }
